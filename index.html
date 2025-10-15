@@ -7,14 +7,14 @@
 <style>
   :root{--bg:#0a0f14;--fg:#e7f0ff;--muted:#9fb3c7;--card:#121821}
   html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans KR,Helvetica,Arial,sans-serif}
-  #ui{position:fixed;left:10px;top:10px;background:#121821cc;padding:10px;border-radius:12px;border:1px solid #223449;max-width:980px;z-index:10;max-height:calc(100vh - 20px);overflow:auto}
+  #ui{position:fixed;left:10px;top:10px;background:#121821cc;padding:10px;border-radius:12px;border:1px solid #223449;max-width:980px;z-index:20;max-height:calc(100vh - 20px);overflow:auto}
   #ui label{display:flex;gap:8px;align-items:center;font-size:13px;margin:6px 0}
   #ui input[type=range]{width:100%}
   #ui input[type=number]{width:90px}
   #ui button,#ui select{background:#182536;color:var(--fg);border:1px solid #2b435f;border-radius:8px;padding:6px 8px;cursor:pointer}
   #ui button:hover{background:#1f3046}
-  #hud{position:fixed;left:10px;bottom:10px;background:#0009;padding:6px 8px;border-radius:10px;font-size:12px;z-index:9}
-  #sbsLabels{position:fixed;top:8px;left:0;right:0;display:flex;justify-content:space-between;pointer-events:none;z-index:8}
+  #hud{position:fixed;left:10px;bottom:10px;background:#0009;padding:6px 8px;border-radius:10px;font-size:12px;z-index:19}
+  #sbsLabels{position:fixed;top:8px;left:0;right:0;display:flex;justify-content:space-between;pointer-events:none;z-index:18}
   .pill{background:#0009;border:1px solid #335;padding:4px 8px;border-radius:999px;font-size:12px}
   .pill.L{margin-left:12%;color:#ffb3b3;border-color:#553}
   .pill.R{margin-right:12%;color:#b3e6ff;border-color:#355}
@@ -25,7 +25,8 @@
   .small{font-size:12px}
   .upload-list{font-size:12px;color:var(--muted);margin-top:4px}
   .col{display:flex;flex-direction:column;gap:6px}
-  #debugBox{position:fixed;right:10px;top:10px;background:#08121a88;color:#9fb3c7;padding:8px;border-radius:8px;font-size:12px;z-index:11;max-width:320px;overflow:auto}
+  #debugBox{position:fixed;right:10px;top:10px;background:#08121acc;color:#9fb3c7;padding:8px;border-radius:8px;font-size:12px;z-index:21;max-width:360px;max-height:70vh;overflow:auto}
+  #diagCanvas{position:fixed;right:10px;bottom:10px;width:160px;height:120px;border:2px solid #223449;border-radius:8px;z-index:22;background:#000}
 </style>
 </head>
 <body>
@@ -127,23 +128,27 @@
     </div>
   </fieldset>
 
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px">
     <button id="enterVR">Enter VR</button>
     <button id="exitVR">Exit VR</button>
+    <button id="runDiag">Run Diagnostics</button>
   </div>
 </div>
 
 <div id="sbsLabels"><span class="pill L">LEFT</span><span class="pill R">RIGHT</span></div>
 <canvas id="webgl"></canvas>
 <div id="hud">—</div>
-<div id="debugBox" aria-hidden="false"></div>
+<div id="debugBox" aria-hidden="false">ready</div>
+<!-- diagnostic canvas for a raw GL test -->
+<canvas id="diagCanvas" width="160" height="120" style="display:none"></canvas>
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.min.js"></script>
 <script>
 (function(){
   'use strict';
   const $ = id => document.getElementById(id);
-  const debug = (s)=>{ const b=$('debugBox'); b.textContent = (s===null?'':String(s)); console.log(s); };
+  const debugBox = $('debugBox');
+  function dbg(s){ debugBox.textContent = String(s); console.log(s); }
 
   // Renderer + scene
   const canvas = $('webgl');
@@ -151,7 +156,6 @@
   renderer.xr.enabled = true;
   renderer.outputEncoding = THREE.sRGBEncoding;
   renderer.domElement.style.touchAction = 'none';
-  // prefer local-floor (Three will request this when starting XRSession)
   renderer.xr.setReferenceSpaceType && renderer.xr.setReferenceSpaceType('local-floor');
 
   function fit(){ const dpr=Math.min(2,window.devicePixelRatio||1); renderer.setPixelRatio(dpr); renderer.setSize(window.innerWidth, window.innerHeight, false); }
@@ -159,21 +163,11 @@
   fit();
 
   const scene = new THREE.Scene();
-  // use a subtle non-black background to make it's easier to see if content renders
   scene.background = new THREE.Color(0x101218);
 
   const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.01, 100);
-
-// Unified render loop for both PC and VR
-function render(time){
-  try { renderer.render(scene, camera); } catch(e) { /* noop */ }
-}
-
   camera.position.set(0,0,2.2);
-camera.up.set(0,1,0);
-camera.lookAt(0,0,0);
 
-  // lights (use simple ambient + directional)
   const amb = new THREE.AmbientLight(0xffffff, 0.9); scene.add(amb);
   const dir = new THREE.DirectionalLight(0xffffff, 0.8); dir.position.set(3,5,4); scene.add(dir);
   const lightDir = new THREE.Vector3().copy(dir.position).normalize();
@@ -187,7 +181,6 @@ camera.lookAt(0,0,0);
   let uploadedL = null, uploadedR = null;
   const texLoader = new THREE.TextureLoader(); texLoader.setCrossOrigin('anonymous');
 
-  // simple shader for primitives (keeps previous behavior)
   function commonUniforms(){ return {
     uMap:{value:null}, uHasMap:{value:0},
     uLum:{value:1.0}, uCon:{value:1.0}, uTint:{value:new THREE.Vector3(0,0,0)},
@@ -242,11 +235,8 @@ camera.lookAt(0,0,0);
     clearFusion();
     const geo = buildPrimitiveGeo(kind,size);
     const matL = makePrimitiveMaterial(), matR = makePrimitiveMaterial();
-    meshL = new THREE.Mesh(geo, matL); meshL.layers.set(LAYER_L);
-    meshR = new THREE.Mesh(geo.clone ? geo.clone() : geo, matR); meshR.layers.set(LAYER_R);
-    // set a small horizontal offset for initial vergence (keeps objects reasonable in mono preview)
-    meshL.position.x = -0.03;
-    meshR.position.x = 0.03;
+    meshL = new THREE.Mesh(geo, matL); meshL.layers.set(LAYER_L); meshL.position.x = -0.03;
+    meshR = new THREE.Mesh(geo.clone ? geo.clone() : geo, matR); meshR.layers.set(LAYER_R); meshR.position.x = 0.03;
     meshL.userData.basePos = meshL.position.clone(); meshR.userData.basePos = meshR.position.clone();
     fusionGroup.add(meshL); fusionGroup.add(meshR);
   }
@@ -291,12 +281,11 @@ camera.lookAt(0,0,0);
     img.src = url;
   });
 
-  // source / primitive controls
-  $('source').addEventListener('change', ()=>{ if($('source').value === 'primitive') buildFusionFromPrimitive($('primitive').value, +$('primSize').value); else buildFusionFromImagePair(); });
+  // controls
+  $('source').addEventListener('change', ()=>{ if($('source').value==='primitive') buildFusionFromPrimitive($('primitive').value, +$('primSize').value); else buildFusionFromImagePair(); });
   $('primitive').addEventListener('change', ()=>{ if($('source').value==='primitive') buildFusionFromPrimitive($('primitive').value, +$('primSize').value); });
   $('primSize').addEventListener('input', ()=>{ if($('source').value==='primitive') buildFusionFromPrimitive($('primitive').value, +$('primSize').value); else buildFusionFromImagePair(); });
 
-  // texture upload for primitives
   function setPrimitiveTexture(eye, file){
     if(!file) return;
     const reader = new FileReader();
@@ -338,7 +327,6 @@ camera.lookAt(0,0,0);
     else { state='down'; const q = (t - popTime - holdTime)/popTime; curAmount = (1 - q) * +$('popAmount').value; }
     $('popStatus').textContent = state;
 
-    // direction from fusionGroup to camera
     const fusionWorldPos = fusionGroup.getWorldPosition(new THREE.Vector3());
     const camWorldPos = camera.getWorldPosition(new THREE.Vector3());
     const dir = camWorldPos.sub(fusionWorldPos).normalize();
@@ -356,7 +344,7 @@ camera.lookAt(0,0,0);
     }
   }
 
-  // Render loop (non-XR preview)
+  // Render loop (non-XR)
   function renderLoop(t){
     if(!running) return;
     const dt = (t - lastT)/1000; lastT = t;
@@ -377,10 +365,8 @@ camera.lookAt(0,0,0);
       const half = Math.max(1, w >> 1);
       camera.aspect = half/h; camera.updateProjectionMatrix();
       renderer.setScissorTest(true);
-      // left
       renderer.setViewport(0,0,half,h); renderer.setScissor(0,0,half,h);
       camera.layers.set(LAYER_L); renderer.render(scene, camera);
-      // right
       renderer.setViewport(half,0,half,h); renderer.setScissor(half,0,half,h);
       camera.layers.set(LAYER_R); renderer.render(scene, camera);
       camera.layers.set(0);
@@ -393,13 +379,13 @@ camera.lookAt(0,0,0);
       camera.layers.set(0);
     }
 
-    requestAnimationFrame(render);
+    requestAnimationFrame(renderLoop);
   }
 
-  $('btnStart').addEventListener('click', ()=>{ if(!running){ running=true; lastT=performance.now(); requestAnimationFrame(render); debug('Preview started'); }});
-  $('btnStop').addEventListener('click', ()=>{ running=false; debug('Preview paused'); });
+  $('btnStart').addEventListener('click', ()=>{ if(!running){ running=true; lastT=performance.now(); requestAnimationFrame(renderLoop); dbg('Preview started'); }});
+  $('btnStop').addEventListener('click', ()=>{ running=false; dbg('Preview paused'); });
 
-  // Robust XR entry
+  // XR entry (robust)
   let xrSession = null;
   $('enterVR').addEventListener('click', async ()=>{
     try{
@@ -411,71 +397,30 @@ camera.lookAt(0,0,0);
         if(!confirm('immersive-vr 미지원, immersive-ar는 지원합니다. AR로 시도할까요?')) return;
       }
 
-      const sessionInit = {
-        optionalFeatures: ['bounded-floor'],
-        requiredFeatures: ['local-floor'] // keep empty to maximize compatibility; fallback handled below
-      };
-
-      // request immersive-vr, fallback to immersive-ar if necessary
-      try{
-        let _xrReqErr = null;
-      try {
-        xrSession = await navigator.xr.requestSession('immersive-vr', sessionInit);
-      } catch (err) {
-        console.warn('immersive-vr request failed:', err);
-        _xrReqErr = err;
-      }
-      if (!xrSession) {
-        try {
-          const _arOk = await navigator.xr.isSessionSupported('immersive-ar');
-          if (_arOk) {
-            xrSession = await navigator.xr.requestSession('immersive-ar', sessionInit);
-          }
-        } catch (_arErr) { console.warn('immersive-ar check/request failed:', _arErr); }
-      }
-      if (!xrSession && _xrReqErr) throw _xrReqErr;;
-      }catch(err){
+      const sessionInit = { optionalFeatures: ['local-floor','bounded-floor','layers','hand-tracking','viewer'] };
+      try{ xrSession = await navigator.xr.requestSession('immersive-vr', sessionInit); }
+      catch(err){
         console.warn('immersive-vr request failed:', err);
         const arSupported = await navigator.xr.isSessionSupported('immersive-ar').catch(()=>false);
-        if(arSupported){
-          xrSession = await navigator.xr.requestSession('immersive-ar', sessionInit);
-        } else {
-          throw err;
-        }
+        if(arSupported) xrSession = await navigator.xr.requestSession('immersive-ar', sessionInit);
+        else throw err;
       }
 
-      // attach to three renderer
       await renderer.xr.setSession(xrSession);
-      // Stabilize reference space & ensure we have an animation loop
-      if (renderer.xr && typeof renderer.xr.setReferenceSpaceType === 'function') {
-        try { renderer.xr.setReferenceSpaceType('local-floor'); } catch(e) {}
-      }
-      if (typeof renderer.getAnimationLoop !== 'function' || !renderer.getAnimationLoop()) {
-        try { renderer.setAnimationLoop(render); } catch(e) {}
-      }
       lastT = performance.now();
 
-      // small visible test object for debugging in XR: ensures something is always visible
-      const testGeo = new THREE.BoxGeometry(0.08,0.08,0.08);
-      const testMat = new THREE.MeshStandardMaterial({color:0x44ff88});
-      const testCube = new THREE.Mesh(testGeo, testMat);
-      testCube.position.set(0,0,-0.6); // in front of the starting camera
-      testCube.userData._isXRDebug = true;
-      scene.add(testCube);
+      // transient debug cube to ensure something is visible in XR early
+      const debugCube = new THREE.Mesh(new THREE.BoxGeometry(0.08,0.08,0.08), new THREE.MeshStandardMaterial({color:0x44ff88}));
+      debugCube.position.set(0,0,-0.6);
+      debugCube.userData._frames = 0;
+      scene.add(debugCube);
 
-      // ensure meshes have per-eye layers set
-      if(meshL) meshL.layers.set(LAYER_L);
-      if(meshR) meshR.layers.set(LAYER_R);
-
-      // XR animation loop (three.js)
       renderer.setAnimationLoop((now)=>{
         const dt = (now - lastT) / 1000;
         lastT = now;
 
-        // Update pop, rotation, billboards
         if(running) updatePop(dt);
         if($('source').value === 'image_pair'){
-          // billboard using XR camera if available
           const xrCamNow = renderer.xr.getCamera ? renderer.xr.getCamera(camera) : camera;
           const quat = (xrCamNow && xrCamNow.quaternion) ? xrCamNow.quaternion : camera.quaternion;
           if(meshL && meshL.userData.isImagePlane) meshL.quaternion.copy(quat);
@@ -484,61 +429,40 @@ camera.lookAt(0,0,0);
           if($('autoRotate').checked) fusionGroup.rotation.y += dt * (+$('primSize') || 0.4);
         }
 
-        // Determine left/right subcamera indices robustly each frame by comparing world X positions.
-        // This is important because some runtimes may reorder subcameras.
+        // set per-eye layers robustly
         const xrCam = renderer.xr.getCamera ? renderer.xr.getCamera(camera) : null;
-        let leftIdx = 0, rightIdx = 1;
-        let mappingInfo = 'no-array-camera';
-        if(xrCam && xrCam.isArrayCamera && xrCam.cameras && xrCam.cameras.length >= 2){
+        if(xrCam && xrCam.isArrayCamera && xrCam.cameras && xrCam.cameras.length>=2){
           try{
             const p0 = new THREE.Vector3(), p1 = new THREE.Vector3();
-            xrCam.cameras[0].getWorldPosition(p0);
-            xrCam.cameras[1].getWorldPosition(p1);
-            if(p0.x < p1.x){ leftIdx = 0; rightIdx = 1; }
-            else { leftIdx = 1; rightIdx = 0; }
-            // enforce layers per subcamera
-            xrCam.cameras[leftIdx].layers.enable(LAYER_L); xrCam.cameras[leftIdx].layers.disable(LAYER_R);
-            xrCam.cameras[rightIdx].layers.enable(LAYER_R); xrCam.cameras[rightIdx].layers.disable(LAYER_L);
-            mappingInfo = `array-camera left=${leftIdx} right=${rightIdx} p0.x=${p0.x.toFixed(4)} p1.x=${p1.x.toFixed(4)}`;
-          }catch(e){
-            console.warn('XR camera mapping error', e);
-            mappingInfo = 'camera-mapping-error';
-          }
+            xrCam.cameras[0].getWorldPosition(p0); xrCam.cameras[1].getWorldPosition(p1);
+            if(p0.x < p1.x){ xrCam.cameras[0].layers.enable(LAYER_L); xrCam.cameras[1].layers.enable(LAYER_R); }
+            else { xrCam.cameras[1].layers.enable(LAYER_L); xrCam.cameras[0].layers.enable(LAYER_R); }
+          }catch(e){ console.warn('XR camera mapping error', e); }
         }
 
-        // Debug HUD
-        debug(`XR running. ${mappingInfo}`);
-
-        // Render - three.js will handle per-eye rendering using the configured subcameras
         renderer.render(scene, camera);
 
-        // remove transient XR debug cube after first frames if not needed (keeps a visible object during initial frames)
-        if(testCube && testCube.parent){
-          // keep it a little while: remove after first 60 frames
-          testCube.userData._frames = (testCube.userData._frames||0) + 1;
-          if(testCube.userData._frames > 60) scene.remove(testCube);
+        if(debugCube.parent){
+          debugCube.userData._frames++;
+          if(debugCube.userData._frames > 90) scene.remove(debugCube);
         }
       });
 
-      // cleanup on session end
-      xrSession.addEventListener('end', ()=>{ renderer.setAnimationLoop(null); xrSession = null; lastT = performance.now(); debug('XR session ended'); });
-      debug('XR session started: OK');
+      xrSession.addEventListener('end', ()=>{ renderer.setAnimationLoop(null); xrSession=null; lastT = performance.now(); dbg('XR session ended'); });
+      dbg('XR session started: OK');
     }catch(e){
       console.error('VR 진입 오류:', e);
       alert('VR 진입 오류: ' + (e && e.message ? e.message : e));
-      debug('XR error: ' + (e && e.message ? e.message : e));
+      dbg('XR error: ' + (e && e.message ? e.message : e));
     }
   });
 
-  $('exitVR').addEventListener('click', async ()=>{
-    try{ if(xrSession) await xrSession.end(); }catch(e){ console.warn('XR 세션 종료 실패', e); debug('XR end error: '+e); }
-  });
+  $('exitVR').addEventListener('click', async ()=>{ try{ if(xrSession) await xrSession.end(); }catch(e){ console.warn('XR 세션 종료 실패', e); dbg('XR end error: '+e); } });
 
-  // Ensure camera sees both L/R by default so non-XR preview isn't black
-  camera.layers.enable(LAYER_L);
-  camera.layers.enable(LAYER_R);
+  // Ensure camera sees both L/R by default
+  camera.layers.enable(LAYER_L); camera.layers.enable(LAYER_R);
 
-  // A defensive "always visible fallback" object (simple neutral sphere) so user sees something if per-eye layering fails.
+  // fallback sphere visible in normal preview
   const fallbackGeo = new THREE.SphereGeometry(0.12, 32, 20);
   const fallbackMat = new THREE.MeshStandardMaterial({color:0x8888ff, metalness:0.1, roughness:0.7});
   const fallback = new THREE.Mesh(fallbackGeo, fallbackMat);
@@ -546,17 +470,103 @@ camera.lookAt(0,0,0);
   fallback.userData._isFallback = true;
   scene.add(fallback);
 
-  // initialize with primitive (creates meshL and meshR)
+  // initial content
   buildFusionFromPrimitive('sphere', +$('primSize').value);
 
-  // Immediately render one frame to avoid black canvas on load
-  renderer.render(scene, camera);
-  debug('Initial frame rendered. If still black, open Console and copy logs.');
+  // immediate render to avoid initial black
+  try{ renderer.render(scene, camera); dbg('Initial frame rendered. If still black, click "Run Diagnostics" and copy the debug output.'); }
+  catch(e){ dbg('Initial render failed: ' + (e && e.message)); console.error(e); }
 
-  // Auto-start preview so there's visible animation without extra clicks (you can pause)
-  running = true;
-  lastT = performance.now();
-  requestAnimationFrame(render);
+  // auto-start preview
+  running = true; lastT = performance.now(); requestAnimationFrame(renderLoop);
+
+  // ---------- Diagnostics: expose window.appDiagnostics.dump() and UI button ----------
+  function runRawGLTest(){
+    // create/use small offscreen canvas for raw GL diagnostics to avoid interfering with three.js
+    const diag = $('diagCanvas');
+    diag.style.display = 'block';
+    const gl = diag.getContext('webgl2') || diag.getContext('webgl') || diag.getContext('experimental-webgl');
+    if(!gl) return {ok:false, msg:'WebGL context not available for diag canvas'};
+    // clear with a distinct color and draw a simple rectangle using clear only (non-shader)
+    gl.clearColor(0.1, 0.2, 0.6, 1.0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    return {
+      ok:true,
+      glVersion: gl.getParameter(gl.VERSION),
+      shadingLang: gl.getParameter(gl.SHADING_LANGUAGE_VERSION),
+      vendor: gl.getParameter(gl.VENDOR),
+      renderer: gl.getParameter(gl.RENDERER),
+      maxTexSize: gl.getParameter(gl.MAX_TEXTURE_SIZE)
+    };
+  }
+
+  function dumpDiagnostics(){
+    try{
+      const out = [];
+      out.push('--- Diagnostics snapshot ---');
+      // Renderer/canvas
+      out.push('canvas size (css): ' + (canvas.width/ (window.devicePixelRatio||1)).toFixed(1) + 'x' + (canvas.height/ (window.devicePixelRatio||1)).toFixed(1) + ' (physical: ' + canvas.width + 'x' + canvas.height + ')');
+      // try to get GL from three renderer
+      let glInfo = {};
+      try{
+        const gl = renderer.getContext();
+        glInfo = {
+          version: gl.getParameter(gl.VERSION),
+          sl: gl.getParameter(gl.SHADING_LANGUAGE_VERSION),
+          vendor: gl.getParameter(gl.VENDOR),
+          renderer: gl.getParameter(gl.RENDERER),
+          maxTexSize: gl.getParameter(gl.MAX_TEXTURE_SIZE)
+        };
+      }catch(e){ out.push('renderer.getContext() failed: ' + e.message); }
+      out.push('GL: ' + JSON.stringify(glInfo));
+
+      out.push('three.renderer.info: ' + JSON.stringify(renderer.info));
+
+      out.push('camera pos: ' + camera.position.toArray().map(n=>n.toFixed(3)).join(', ') + ' layersMask:' + camera.layers.mask);
+      out.push('camera near/far: ' + camera.near + '/' + camera.far + ' fov:' + camera.fov);
+
+      // scene children brief
+      out.push('scene.children count: ' + scene.children.length);
+      scene.children.forEach((c,i)=>{
+        try{
+          const typ = c.type || c.constructor && c.constructor.name;
+          const pos = c.position ? c.position.toArray().map(n=>n.toFixed(3)).join(',') : '';
+          out.push(`${i}: ${typ} name=${c.name||''} visible=${c.visible} pos=[${pos}]`);
+        }catch(e){}
+      });
+
+      // info about meshL / meshR / fallback
+      function meshInfo(m, name){
+        if(!m) return `${name}: (null)`;
+        const matType = m.material ? (m.material.type || m.material.constructor && m.material.constructor.name) : 'no-material';
+        const map = (m.material && m.material.map) ? 'hasMap' : 'noMap';
+        return `${name}: pos=${m.position.toArray().map(n=>n.toFixed(3)).join(',')} visible=${m.visible} layers=${m.layers.mask} type=${matType} ${map}`;
+      }
+      out.push(meshInfo(meshL,'meshL'));
+      out.push(meshInfo(meshR,'meshR'));
+      out.push('fallback present: ' + (fallback && fallback.parent ? 'yes' : 'no'));
+
+      // run the small raw GL test on separate canvas
+      const raw = runRawGLTest();
+      out.push('rawGL test: ' + JSON.stringify(raw));
+
+      const txt = out.join('\n');
+      dbg(txt);
+      return txt;
+    }catch(e){
+      dbg('Diagnostics failed: ' + (e && e.message));
+      return 'Diagnostics exception: ' + (e && e.message);
+    }
+  }
+
+  // expose a simple global diagnostic API for copy/paste from console
+  window.appDiagnostics = {
+    dump: dumpDiagnostics,
+    runRawGLTest
+  };
+
+  $('runDiag').addEventListener('click', ()=>{ const r = dumpDiagnostics(); alert('Diagnostics output printed to Debug box and Console.'); });
+
 })();
 </script>
 </body>
